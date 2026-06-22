@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Google Sans", Roboto, Arial, sans-serif;
+      font-size: 14px;
+      color: #333;
+      padding: 20px 24px;
+      background: #fff;
+    }
+
+    h2 {
+      font-size: 18px;
+      font-weight: 500;
+      color: #1B5E20;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    /* ── Step 1: Lookup ── */
+    .lookup-section {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 6px;
+    }
+
+    .lookup-section .form-group { flex: 1; margin-bottom: 0; }
+
+    .btn-lookup {
+      padding: 8px 18px;
+      background: #1B5E20;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      height: 36px;
+    }
+    .btn-lookup:hover { background: #2E7D32; }
+    .btn-lookup:disabled { background: #A5D6A7; cursor: not-allowed; }
+
+    .or-manual {
+      font-size: 12px;
+      color: #999;
+      margin-bottom: 16px;
+    }
+    .or-manual a {
+      color: #1B5E20;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    /* ── Step 2: Details ── */
+    #detailsSection {
+      display: none;
+      border-top: 1px solid #eee;
+      padding-top: 14px;
+    }
+
+    #detailsSection.visible { display: block; }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 10px;
+    }
+
+    .form-group {
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 3px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #1B5E20;
+      box-shadow: 0 0 0 2px rgba(27, 94, 32, 0.15);
+    }
+
+    textarea { resize: vertical; min-height: 40px; }
+
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+    .row .form-group { flex: 1; }
+    .row .form-group.small { flex: 0 0 90px; }
+
+    .ai-filled {
+      border-left: 3px solid #A5D6A7;
+    }
+
+    .btn-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    button {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-primary {
+      background: #1B5E20;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #2E7D32; }
+    .btn-primary:disabled { background: #A5D6A7; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: #f1f1f1;
+      color: #333;
+    }
+    .btn-secondary:hover { background: #e0e0e0; }
+
+    #status {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      display: none;
+      white-space: pre-line;
+    }
+
+    #status.success { display: block; background: #E8F5E9; color: #1B5E20; border: 1px solid #A5D6A7; }
+    #status.error   { display: block; background: #FFEBEE; color: #C62828; border: 1px solid #EF9A9A; }
+    #status.loading { display: block; background: #FFF8E1; color: #F57F17; border: 1px solid #FFE082; }
+
+    .fun-fact {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: #F3E5F5;
+      color: #6A1B9A;
+      border-radius: 4px;
+      font-size: 13px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- STEP 1: Course name + lookup -->
+  <h2>Add a Golf Course</h2>
+  <p class="subtitle">Enter a course name and we'll look up the details.</p>
+
+  <div class="lookup-section">
+    <div class="form-group">
+      <label>Course Name</label>
+      <input type="text" id="courseName" placeholder='e.g. "St Andrews Old Course"' autofocus>
+    </div>
+    <button class="btn-lookup" id="lookupBtn" onclick="doLookup()">Look Up</button>
+  </div>
+  <p class="or-manual">or <a onclick="showManualEntry()">enter details manually</a></p>
+
+  <!-- STEP 2: Editable detail fields -->
+  <div id="detailsSection">
+    <div class="section-label">Course Details — review &amp; edit</div>
+
+    <div class="form-group">
+      <label>Full Name</label>
+      <input type="text" id="name">
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>City</label>
+        <input type="text" id="city">
+      </div>
+      <div class="form-group small">
+        <label>State / Region</label>
+        <input type="text" id="state" placeholder="CA">
+      </div>
+      <div class="form-group small">
+        <label>Country</label>
+        <input type="text" id="country" placeholder="US">
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>Architect</label>
+        <input type="text" id="architect">
+      </div>
+      <div class="form-group small">
+        <label>Type</label>
+        <select id="type">
+          <option value="">—</option>
+          <option value="Public">Public</option>
+          <option value="Private">Private</option>
+          <option value="Resort">Resort</option>
+          <option value="Semi-Private">Semi-Private</option>
+          <option value="Military">Military</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>Golfweek List</label>
+        <select id="gw_list">
+          <option value="">None</option>
+          <option value="Modern">Modern</option>
+          <option value="Classic">Classic</option>
+          <option value="Resort">Resort</option>
+          <option value="Public">Public</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Most Memorable Hole</label>
+        <input type="text" id="most_memorable" placeholder="e.g. #7">
+      </div>
+      <div class="form-group">
+        <label>Least Memorable Hole</label>
+        <input type="text" id="least_memorable" placeholder="e.g. #12">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="notes" rows="2" placeholder="Any notes about your round…"></textarea>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="google.script.host.close()">Cancel</button>
+      <button class="btn-primary" id="addBtn" onclick="submitForm()">Add Course</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+  <div id="funFact" class="fun-fact"></div>
+
+  <script>
+    var forceAdd = false;
+    var lookupData = null;  // stores the AI result for fun_fact, etc.
+
+    // ── STEP 1: AI Lookup ──
+
+    function doLookup() {
+      var courseName = document.getElementById("courseName").value.trim();
+      if (!courseName) {
+        showStatus("Please enter a course name.", "error");
+        return;
+      }
+
+      showStatus("Looking up \"" + courseName + "\"... this takes a few seconds.", "loading");
+      document.getElementById("lookupBtn").disabled = true;
+
+      google.script.run
+        .withSuccessHandler(onLookupSuccess)
+        .withFailureHandler(onLookupFailure)
+        .lookupCourse(courseName);
+    }
+
+    function onLookupSuccess(data) {
+      document.getElementById("lookupBtn").disabled = false;
+      lookupData = data;
+      clearStatus();
+
+      // Populate all fields
+      document.getElementById("name").value       = data.name || document.getElementById("courseName").value;
+      document.getElementById("city").value        = data.city || "";
+      document.getElementById("state").value       = data.state || "";
+      document.getElementById("country").value     = data.country || "";
+      document.getElementById("architect").value   = data.architect || "";
+      setSelect("type", data.type);
+      setSelect("gw_list", data.gw_list);
+
+      // Highlight AI-filled fields
+      ["name", "city", "state", "country", "architect"].forEach(function(id) {
+        if (document.getElementById(id).value) {
+          document.getElementById(id).classList.add("ai-filled");
+        }
+      });
+      if (data.type) document.getElementById("type").classList.add("ai-filled");
+      if (data.gw_list) document.getElementById("gw_list").classList.add("ai-filled");
+
+      // Show fun fact
+      if (data.fun_fact) {
+        var ff = document.getElementById("funFact");
+        ff.textContent = "Fun fact: " + data.fun_fact;
+        ff.style.display = "block";
+      }
+
+      // Reveal details section
+      showDetails();
+    }
+
+    function onLookupFailure(err) {
+      document.getElementById("lookupBtn").disabled = false;
+      showStatus("Lookup failed: " + err.message + "\n\nYou can still enter details manually below.", "error");
+      // Show the form anyway so they can enter manually
+      document.getElementById("name").value = document.getElementById("courseName").value;
+      showDetails();
+    }
+
+    // ── Manual entry shortcut ──
+
+    function showManualEntry() {
+      clearStatus();
+      document.getElementById("name").value = document.getElementById("courseName").value;
+      document.getElementById("country").value = "US";
+      showDetails();
+    }
+
+    function showDetails() {
+      document.getElementById("detailsSection").classList.add("visible");
+    }
+
+    // ── STEP 2: Submit ──
+
+    function submitForm() {
+      var name = document.getElementById("name").value.trim();
+      var city = document.getElementById("city").value.trim();
+
+      if (!name || !city) {
+        showStatus("Course name and city are required.", "error");
+        return;
+      }
+
+      var formData = {
+        name:            name,
+        city:            city,
+        state:           document.getElementById("state").value.trim(),
+        country:         document.getElementById("country").value.trim(),
+        architect:       document.getElementById("architect").value.trim(),
+        type:            document.getElementById("type").value,
+        gw_list:         document.getElementById("gw_list").value,
+        most_memorable:  document.getElementById("most_memorable").value.trim(),
+        least_memorable: document.getElementById("least_memorable").value.trim(),
+        notes:           document.getElementById("notes").value.trim(),
+        forceAdd:        forceAdd
+      };
+
+      showStatus("Adding course to spreadsheet...", "loading");
+      document.getElementById("addBtn").disabled = true;
+
+      google.script.run
+        .withSuccessHandler(onAddSuccess)
+        .withFailureHandler(onAddFailure)
+        .addCourse(formData);
+    }
+
+    function onAddSuccess(result) {
+      document.getElementById("addBtn").disabled = false;
+
+      if (result.duplicate && !forceAdd) {
+        showStatus(result.message + "\n\nClick 'Add Course' again to add anyway.", "error");
+        forceAdd = true;
+        return;
+      }
+
+      if (result.success) {
+        showStatus(result.message, "success");
+        document.getElementById("addBtn").textContent = "Done!";
+        document.getElementById("addBtn").disabled = true;
+        setTimeout(function() { google.script.host.close(); }, 3500);
+      } else {
+        showStatus(result.message, "error");
+      }
+    }
+
+    function onAddFailure(err) {
+      document.getElementById("addBtn").disabled = false;
+      showStatus("Error: " + err.message, "error");
+    }
+
+    // ── Helpers ──
+
+    function setSelect(id, value) {
+      var sel = document.getElementById(id);
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === value) {
+          sel.selectedIndex = i;
+          return;
+        }
+      }
+    }
+
+    function showStatus(msg, type) {
+      var el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = type;
+    }
+
+    function clearStatus() {
+      var el = document.getElementById("status");
+      el.textContent = "";
+      el.className = "";
+      el.style.display = "none";
+    }
+
+    // Enter triggers lookup from the course name field
+    document.getElementById("courseName").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") doLookup();
+    });
+  </script>
+
+</body>
+</html>
