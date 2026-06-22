@@ -20,6 +20,7 @@
 var CLAUDE_MODEL      = "claude-sonnet-4-6";
 var SHEET_NAME        = "Course Ratings";
 var DASH_NAME         = "Rankings Dashboard";
+var GW_RANKINGS_SHEET = "GW Rankings";
 var DATA_START_ROW    = 4;   // row 1=title, 2=subtitle, 3=headers
 var TOTAL_COLUMNS     = 23;
 
@@ -77,6 +78,7 @@ function onOpen() {
     .addItem("Add Course...", "showAddCourseDialog")
     .addItem("Update Rankings", "rebuildRankings")
     .addItem("Refresh Golfweek Rankings", "refreshGolfweekRankings")
+    .addItem("GW Rankings: Import help...", "showImportRankingsHelp")
     .addSeparator()
     .addItem("Set API Key...", "showApiKeyDialog")
     .addItem("Insert Country Column", "insertCountryColumn")
@@ -186,6 +188,50 @@ function lookupCourse(courseName) {
     "- Return ONLY valid JSON, no markdown formatting, no explanation.";
 
   return callClaude(apiKey, prompt);
+}
+
+
+function buildRankingsIndex() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var rankSheet = ss.getSheetByName(GW_RANKINGS_SHEET);
+  if (!rankSheet) return null;
+
+  var data = rankSheet.getDataRange().getValues();
+  if (data.length < 2) return null;
+
+  var h = data[0];
+  var ci = { name: h.indexOf('name'), list: h.indexOf('gw_list'), rank: h.indexOf('rank') };
+  if (ci.name === -1) return null;
+
+  var index = {};
+  for (var i = 1; i < data.length; i++) {
+    var key = String(data[i][ci.name] || '').trim().toLowerCase();
+    if (!key || index[key]) continue;
+    var r = data[i][ci.rank];
+    index[key] = {
+      gw_list: String(data[i][ci.list] || ''),
+      gw_rank: (typeof r === 'number') ? r : (parseInt(r, 10) || null)
+    };
+  }
+  return index;
+}
+
+
+function lookupRankingFromSheet(courseName) {
+  var index = buildRankingsIndex();
+  return index ? (index[courseName.trim().toLowerCase()] || null) : null;
+}
+
+
+function showImportRankingsHelp() {
+  SpreadsheetApp.getUi().alert(
+    "To load Golfweek rankings data:\n\n" +
+    "1. Run:  python merge_rankings.py\n" +
+    "2. In Google Sheets: File → Import → Upload\n" +
+    "3. Select  data/all_rankings.csv\n" +
+    "4. Choose 'Insert new sheet(s)', name it '" + GW_RANKINGS_SHEET + "'\n\n" +
+    "Then use 'Refresh Golfweek Rankings' to apply ranks to your courses."
+  );
 }
 
 
@@ -712,34 +758,31 @@ function refreshGolfweekRankings() {
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   var ws  = ss.getSheetByName(SHEET_NAME);
   var ui  = SpreadsheetApp.getUi();
-
   if (!ws) { ui.alert("Sheet '" + SHEET_NAME + "' not found."); return; }
+
+  var index = buildRankingsIndex();
+  if (!index) {
+    ui.alert(
+      "No '" + GW_RANKINGS_SHEET + "' sheet found.\n\n" +
+      "Use Golf Tracker → GW Rankings: Import help... for setup instructions."
+    );
+    return;
+  }
 
   var lastRow = ws.getLastRow();
   if (lastRow < DATA_START_ROW) { ui.alert("No courses found."); return; }
 
   var names = ws.getRange(DATA_START_ROW, COL.name, lastRow - DATA_START_ROW + 1, 1).getValues();
   var updated = 0;
-  var failed  = 0;
-
   for (var i = 0; i < names.length; i++) {
     var name = String(names[i][0] || "").trim();
     if (!name || name === "AVERAGES" || name === "COURSES RATED") continue;
-
-    var result = lookupGolfweekRanking(name);
-    if (result) {
-      applyGwRankToRow(ws, DATA_START_ROW + i, result);
-      updated++;
-    } else {
-      failed++;
-    }
-    Utilities.sleep(300);
+    var result = index[name.toLowerCase()];
+    if (result) { applyGwRankToRow(ws, DATA_START_ROW + i, result); updated++; }
   }
 
   SpreadsheetApp.flush();
-  var msg = "Updated Golfweek rankings for " + updated + " course(s).";
-  if (failed > 0) msg += "\n" + failed + " lookup(s) failed — check logs.";
-  ui.alert(msg);
+  ui.alert("Updated Golfweek rankings for " + updated + " course(s).");
 }
 
 
@@ -831,8 +874,8 @@ function addCourse(formData) {
   // Step 5: Write the course data
   addCourseRow(ws, insertRow, 0, finalData, true);  // number & color fixed in step 6
 
-  // Step 5b: Look up current Golfweek ranking for the new course
-  var gwResult = lookupGolfweekRanking(finalData.name);
+  // Step 5b: Look up current Golfweek ranking (sheet first, Claude fallback)
+  var gwResult = lookupRankingFromSheet(finalData.name) || lookupGolfweekRanking(finalData.name);
   if (gwResult) {
     applyGwRankToRow(ws, insertRow, gwResult);
     finalData.gw_list = gwResult.gw_list || finalData.gw_list;
