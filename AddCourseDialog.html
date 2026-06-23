@@ -173,6 +173,56 @@
       font-size: 13px;
       display: none;
     }
+
+    .tooltip-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .tooltip-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: #1B5E20;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: default;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .tooltip-icon:hover + .tooltip-box,
+    .tooltip-icon:focus + .tooltip-box {
+      display: block;
+    }
+
+    .tooltip-box {
+      display: none;
+      position: absolute;
+      left: 22px;
+      top: -4px;
+      z-index: 100;
+      background: #212121;
+      color: #fff;
+      border-radius: 5px;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.6;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      pointer-events: none;
+    }
+
+    .tooltip-box table { border-collapse: collapse; }
+    .tooltip-box td { padding: 1px 8px 1px 0; vertical-align: top; }
+    .tooltip-box td:first-child { font-weight: 600; color: #A5D6A7; white-space: nowrap; }
+    .tooltip-box td:nth-child(2) { color: #FFD54F; }
   </style>
 </head>
 <body>
@@ -251,6 +301,25 @@
         <label>Least Memorable Hole</label>
         <input type="text" id="least_memorable" placeholder="e.g. #12">
       </div>
+    </div>
+
+    <div class="form-group">
+      <label>
+        <span class="tooltip-wrap">
+          Overall Rating (1–10)
+          <span class="tooltip-icon" tabindex="0">i</span>
+          <span class="tooltip-box">
+            <table>
+              <tr><td>9–10</td><td>Exceptional / Masterpiece</td><td>Among the finest examples in the world</td></tr>
+              <tr><td>7–8</td><td>Excellent / Outstanding</td><td>Worth a special trip to experience</td></tr>
+              <tr><td>5–6</td><td>Very Good / Good</td><td>Strong in this area, enjoyable</td></tr>
+              <tr><td>3–4</td><td>Average / Below Average</td><td>Unremarkable or has notable weaknesses</td></tr>
+              <tr><td>1–2</td><td>Poor / Weak</td><td>Significant shortcomings in this area</td></tr>
+            </table>
+          </span>
+        </span>
+      </label>
+      <input type="number" id="overall" min="1" max="10" step="0.1" placeholder="1–10">
     </div>
 
     <div class="form-group">
@@ -355,6 +424,13 @@
         return;
       }
 
+      var overallRaw = document.getElementById("overall").value.trim();
+      var overallVal = overallRaw ? parseFloat(overallRaw) : null;
+      if (overallVal !== null && (overallVal < 1 || overallVal > 10)) {
+        showStatus("Overall rating must be between 1 and 10.", "error");
+        return;
+      }
+
       var formData = {
         name:            name,
         city:            city,
@@ -363,6 +439,7 @@
         architect:       document.getElementById("architect").value.trim(),
         type:            document.getElementById("type").value,
         gw_list:         document.getElementById("gw_list").value,
+        overall:         overallVal,
         most_memorable:  document.getElementById("most_memorable").value.trim(),
         least_memorable: document.getElementById("least_memorable").value.trim(),
         notes:           document.getElementById("notes").value.trim(),

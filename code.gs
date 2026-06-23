@@ -459,6 +459,7 @@ function addCourseRow(ws, rowNum, courseNum, data, isEven) {
   values[COL.type - 1]            = data.type || "";
   values[COL.gw_list - 1]         = data.gw_list || "";
   values[COL.gw_rank - 1]         = data.gw_rank || "";
+  values[COL.overall - 1]          = (data.overall != null) ? data.overall : "";
   values[COL.most_memorable - 1]  = data.most_memorable || "";
   values[COL.least_memorable - 1] = data.least_memorable || "";
   values[COL.notes - 1]           = data.notes || "";
@@ -855,6 +856,7 @@ function addCourse(formData) {
     architect:       (formData.architect || "").trim(),
     gw_list:         (formData.gw_list || "").trim(),
     gw_rank:         formData.gw_rank || null,
+    overall:         (formData.overall != null && formData.overall !== "") ? Number(formData.overall) : null,
     notes:           (formData.notes || "").trim(),
     most_memorable:  (formData.most_memorable || "").trim(),
     least_memorable: (formData.least_memorable || "").trim()
