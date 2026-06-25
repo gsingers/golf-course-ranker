@@ -68,6 +68,32 @@ var BY_STATE_DATA_START   = 74;
 var BY_STATE_COUNT        = 10;
 
 
+// ── Shared helpers ───────────────────────────────────────────────────────
+
+function isSummaryRow(name) {
+  return !name || name === "AVERAGES" || name === "COURSES RATED";
+}
+
+function getApiKey() {
+  return PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
+}
+
+function parseClaudeJson(text) {
+  if (text.indexOf("```") === 0) {
+    text = text.substring(text.indexOf("\n") + 1);
+    text = text.substring(0, text.lastIndexOf("```"));
+  }
+  var start = text.indexOf("{");
+  var end   = text.lastIndexOf("}");
+  if (start !== -1 && end > start) text = text.substring(start, end + 1);
+  return JSON.parse(text.trim());
+}
+
+function extractColumn(data, colIdx) {
+  return data.map(function(row) { return row[colIdx]; });
+}
+
+
 // =====================================================================
 //  MENU
 // =====================================================================
@@ -146,7 +172,7 @@ function insertCountryColumn() {
     var names = ws.getRange(DATA_START_ROW, COL.name, lastRow - DATA_START_ROW + 1, 1).getValues();
     for (var i = 0; i < names.length; i++) {
       var name = String(names[i][0] || "").trim();
-      if (name !== "" && name !== "AVERAGES" && name !== "COURSES RATED") {
+      if (!isSummaryRow(name)) {
         ws.getRange(DATA_START_ROW + i, 6).setValue("US");
       }
     }
@@ -162,10 +188,8 @@ function insertCountryColumn() {
 // =====================================================================
 
 function lookupCourse(courseName) {
-  var apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
-  if (!apiKey) {
-    throw new Error("No API key found. Use Golf Tracker > Set API Key to add your Anthropic API key.");
-  }
+  var apiKey = getApiKey();
+  if (!apiKey) throw new Error("No API key found. Use Golf Tracker > Set API Key to add your Anthropic API key.");
 
   var prompt =
     "I need details about this golf course. Return ONLY a JSON object with no other text.\n\n" +
@@ -250,10 +274,9 @@ function collectCandidates(name, index, maxN) {
 function scoreAllEntries(tokens, index) {
   var THRESHOLD = 0.25, out = [];
   for (var key in index) {
-    var kt = key.split(' ').filter(function(t) { return t.length > 1 && !GW_STOPWORDS[t]; });
-    var s = jaccardScore(tokens, kt);
+    var e = index[key];
+    var s = jaccardScore(tokens, e._tokens || tokenSet(key));
     if (s >= THRESHOLD) {
-      var e = index[key];
       out.push({ score: s, label: e._name || key, gw_list: e.gw_list, gw_rank: e.gw_rank });
     }
   }
@@ -279,9 +302,9 @@ function fuzzyLookupInIndex(name, index) {
   if (!tokens.length) return null;
   var bestScore = 0, bestEntry = null, bestKey = null;
   for (var key in index) {
-    var keyTokens = key.split(' ').filter(function(t) { return t.length > 1 && !GW_STOPWORDS[t]; });
-    var score = jaccardScore(tokens, keyTokens);
-    if (score > bestScore) { bestScore = score; bestEntry = index[key]; bestKey = key; }
+    var e = index[key];
+    var score = jaccardScore(tokens, e._tokens || tokenSet(key));
+    if (score > bestScore) { bestScore = score; bestEntry = e; bestKey = key; }
   }
   if (bestScore >= THRESHOLD) {
     Logger.log('Fuzzy match: "' + name + '" → "' + bestKey + '" (score: ' + bestScore.toFixed(2) + ')');
@@ -367,7 +390,8 @@ function buildRankingsIndex() {
       gw_list:  gwList,
       gw_rank:  (typeof r === 'number') ? r : (parseInt(r, 10) || null),
       _primary: !!PRIMARY_GW_LISTS[gwList],
-      _name:    raw.toLowerCase()
+      _name:    raw.toLowerCase(),
+      _tokens:  tokenSet(raw)
     };
     indexRow(index, raw, entry);
   }
@@ -437,7 +461,7 @@ function showImportRankingsHelp() {
 
 
 function lookupGolfweekRanking(courseName) {
-  var apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
+  var apiKey = getApiKey();
   if (!apiKey) return null;
 
   var prompt =
@@ -458,43 +482,24 @@ function lookupGolfweekRanking(courseName) {
 }
 
 
-function callClaude(apiKey, prompt) {
+function callClaude(apiKey, prompt, maxTokens) {
   var payload = {
     model: CLAUDE_MODEL,
-    max_tokens: 400,
+    max_tokens: maxTokens || 400,
     messages: [{ role: "user", content: prompt }]
   };
-
   var options = {
     method: "post",
     contentType: "application/json",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01"
-    },
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-
   try {
     var response = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", options);
     var json = JSON.parse(response.getContentText());
-
-    if (json.error) {
-      throw new Error("Claude API error: " + json.error.message);
-    }
-
-    var text = json.content[0].text.trim();
-    if (text.indexOf("```") === 0) {
-      text = text.substring(text.indexOf("\n") + 1);
-      text = text.substring(0, text.lastIndexOf("```"));
-    }
-    var start = text.indexOf("{");
-    var end   = text.lastIndexOf("}");
-    if (start !== -1 && end > start) {
-      text = text.substring(start, end + 1);
-    }
-    return JSON.parse(text.trim());
+    if (json.error) throw new Error("Claude API error: " + json.error.message);
+    return parseClaudeJson(json.content[0].text.trim());
   } catch (e) {
     if (e.message && e.message.indexOf("Claude API error") === 0) throw e;
     throw new Error("Claude lookup failed: " + e.message);
@@ -519,7 +524,7 @@ function cleanupSheet(ws) {
 
   for (var i = names.length - 1; i >= 0; i--) {
     var name = String(names[i][0] || "").trim();
-    if (name === "" || name === "AVERAGES" || name === "COURSES RATED") {
+    if (isSummaryRow(name)) {
       rowsToDelete.push(DATA_START_ROW + i);
     }
   }
@@ -559,27 +564,19 @@ function findInsertionPoint(ws, lastDataRow, newCourse) {
 
   for (var c = 0; c < checks.length; c++) {
     var check = checks[c];
-    var vals = [];
-    for (var r = 0; r < numRows; r++) vals.push(allData[r][check.idx]);
-
+    var vals = extractColumn(allData, check.idx);
     var sortDir = detectSortDirection(vals, check.type);
     if (sortDir !== 0) {
-      // Found the sort column
       var newVal = check.newVal;
       if (newVal === null || newVal === undefined || String(newVal).trim() === "") {
-        // New course has no value for this sort column — append at end
         return lastDataRow + 1;
       }
-      var pos = findInsertPos(vals, newVal, sortDir, check.type);
-      return DATA_START_ROW + pos;
+      return DATA_START_ROW + findInsertPos(vals, newVal, sortDir, check.type);
     }
   }
 
   // No detectable sort — default to alphabetical by name
-  var nameVals = [];
-  for (var r = 0; r < numRows; r++) nameVals.push(allData[r][COL.name - 1]);
-  var pos = findInsertPos(nameVals, newCourse.name, 1, "string");
-  return DATA_START_ROW + pos;
+  return DATA_START_ROW + findInsertPos(extractColumn(allData, COL.name - 1), newCourse.name, 1, "string");
 }
 
 
@@ -648,8 +645,7 @@ function compareValues(a, b, type) {
 function addCourseRow(ws, rowNum, courseNum, data, isEven) {
   var rowBg = isEven ? WHITE : LIGHT_GRAY;
 
-  var values = [];
-  for (var c = 1; c <= TOTAL_COLUMNS; c++) values.push("");
+  var values = new Array(TOTAL_COLUMNS).fill("");
 
   values[COL.number - 1]          = courseNum;
   values[COL.name - 1]            = data.name;
@@ -722,23 +718,15 @@ function renumberAndRecolor(ws, lastDataRow) {
   var numRows = lastDataRow - DATA_START_ROW + 1;
   if (numRows <= 0) return;
 
-  // Batch set course numbers
-  var numbers = [];
+  var numbers = [], backgrounds = [];
   for (var i = 0; i < numRows; i++) {
     numbers.push([i + 1]);
-  }
-  ws.getRange(DATA_START_ROW, COL.number, numRows, 1).setValues(numbers);
-
-  // Batch set alternating backgrounds
-  var backgrounds = [];
-  for (var i = 0; i < numRows; i++) {
     var bg = (i % 2 === 0) ? WHITE : LIGHT_GRAY;
     var rowBg = [];
-    for (var c = 1; c <= TOTAL_COLUMNS; c++) {
-      rowBg.push(c === COL.overall ? LIGHT_GOLD : bg);
-    }
+    for (var c = 1; c <= TOTAL_COLUMNS; c++) rowBg.push(c === COL.overall ? LIGHT_GOLD : bg);
     backgrounds.push(rowBg);
   }
+  ws.getRange(DATA_START_ROW, COL.number, numRows, 1).setValues(numbers);
   ws.getRange(DATA_START_ROW, 1, numRows, TOTAL_COLUMNS).setBackgrounds(backgrounds);
 }
 
@@ -760,10 +748,7 @@ function writeSummaryRows(ws, lastDataRow) {
     ws.insertRowsAfter(maxRows, countRow - maxRows);
   }
 
-  // Clear any content in the gap row and summary rows
-  for (var r = lastDataRow + 1; r <= countRow; r++) {
-    ws.getRange(r, 1, 1, TOTAL_COLUMNS).clearContent().clearFormat();
-  }
+  ws.getRange(lastDataRow + 1, 1, 3, TOTAL_COLUMNS).clearContent().clearFormat();
 
   // ── AVERAGES ──
   ws.getRange(avgRow, COL.name)
@@ -803,7 +788,7 @@ function writeSummaryRows(ws, lastDataRow) {
   try {
     var existingFilter = ws.getFilter();
     if (existingFilter) existingFilter.remove();
-    ws.getRange("A3:W" + lastDataRow).createFilter();
+    ws.getRange(DATA_START_ROW - 1, 1, lastDataRow - DATA_START_ROW + 2, TOTAL_COLUMNS).createFilter();
   } catch (e) {
     Logger.log("Could not update filter: " + e);
   }
@@ -823,7 +808,7 @@ function updateDashboardFormulas(dash, lastDataRow) {
       formula = formula.replace(/[A-Z]\d+\)(?=[^"]*$)/g, function(match) {
         var letter = match.charAt(0);
         // Only update references to the overall column or name column
-        if (letter === overallLetter || letter === "S" || letter === "B") {
+        if (letter === overallLetter || letter === columnToLetter(RATING_END_COL) || letter === columnToLetter(COL.name)) {
           return letter + lastDataRow + ")";
         }
         return match;
@@ -843,27 +828,23 @@ function readCourses(ws) {
   if (lastRow < DATA_START_ROW) return [];
 
   var numRows = lastRow - DATA_START_ROW + 1;
-  var names    = ws.getRange(DATA_START_ROW, COL.name,    numRows, 1).getValues();
-  var cities   = ws.getRange(DATA_START_ROW, COL.city,    numRows, 1).getValues();
-  var states   = ws.getRange(DATA_START_ROW, COL.state,   numRows, 1).getValues();
-  var countries= ws.getRange(DATA_START_ROW, COL.country, numRows, 1).getValues();
-  var ratings  = ws.getRange(DATA_START_ROW, COL.overall, numRows, 1).getValues();
+  var data = ws.getRange(DATA_START_ROW, COL.name, numRows, COL.overall - COL.name + 1).getValues();
+  var cityIdx    = COL.city    - COL.name;
+  var stateIdx   = COL.state   - COL.name;
+  var countryIdx = COL.country - COL.name;
+  var overallIdx = COL.overall - COL.name;
 
   var courses = [];
   for (var i = 0; i < numRows; i++) {
-    var name = names[i][0];
-    if (!name || String(name).trim() === "" ||
-        String(name).trim() === "AVERAGES" ||
-        String(name).trim() === "COURSES RATED") {
-      continue;
-    }
+    var name = String(data[i][0] || "").trim();
+    if (isSummaryRow(name)) continue;
     courses.push({
       row:     DATA_START_ROW + i,
-      name:    String(name).trim(),
-      city:    String(cities[i][0] || "").trim(),
-      state:   String(states[i][0] || "").trim(),
-      country: String(countries[i][0] || "").trim(),
-      rating:  (typeof ratings[i][0] === "number") ? ratings[i][0] : null
+      name:    name,
+      city:    String(data[i][cityIdx]    || "").trim(),
+      state:   String(data[i][stateIdx]   || "").trim(),
+      country: String(data[i][countryIdx] || "").trim(),
+      rating:  (typeof data[i][overallIdx] === "number") ? data[i][overallIdx] : null
     });
   }
   return courses;
@@ -879,18 +860,17 @@ function updateTop10Overall(dash, courses) {
   });
   var top = rated.slice(0, TOP10_COUNT);
 
+  dash.getRange(TOP10_DATA_START, 1, TOP10_COUNT, 6).setFontFamily("Arial").setFontSize(10);
   for (var i = 0; i < TOP10_COUNT; i++) {
     var dashRow = TOP10_DATA_START + i;
     if (i < top.length) {
       var c = top[i];
-      dash.getRange(dashRow, 1).setValue(i + 1)
-        .setFontFamily("Arial").setFontSize(10).setFontColor("#666666").setHorizontalAlignment("left");
-      dash.getRange(dashRow, 2).setValue(c.name).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 3).setValue(c.city).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 4).setValue(c.state).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 5).setValue(c.country || "US").setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 6).setFormula("='Course Ratings'!" + overallLetter + c.row)
-        .setFontFamily("Arial").setFontSize(10).setFontWeight("bold");
+      dash.getRange(dashRow, 1).setValue(i + 1).setFontColor("#666666").setHorizontalAlignment("left");
+      dash.getRange(dashRow, 2).setValue(c.name);
+      dash.getRange(dashRow, 3).setValue(c.city);
+      dash.getRange(dashRow, 4).setValue(c.state);
+      dash.getRange(dashRow, 5).setValue(c.country || "US");
+      dash.getRange(dashRow, 6).setFormula("='Course Ratings'!" + overallLetter + c.row).setFontWeight("bold");
     } else {
       dash.getRange(dashRow, 1, 1, 6).clearContent();
     }
@@ -917,17 +897,16 @@ function updateTop10ByState(dash, courses) {
     if (bestPerState.length >= BY_STATE_COUNT) break;
   }
 
+  dash.getRange(BY_STATE_DATA_START, 1, BY_STATE_COUNT, 6).setFontFamily("Arial").setFontSize(10);
   for (var j = 0; j < BY_STATE_COUNT; j++) {
     var dashRow = BY_STATE_DATA_START + j;
     if (j < bestPerState.length) {
       var bc = bestPerState[j];
-      dash.getRange(dashRow, 1).setValue(j + 1)
-        .setFontFamily("Arial").setFontSize(10).setFontColor("#666666").setHorizontalAlignment("left");
-      dash.getRange(dashRow, 2).setValue(bc.state).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 3).setValue(bc.name).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 4).setValue(bc.city).setFontFamily("Arial").setFontSize(10);
-      dash.getRange(dashRow, 6).setFormula("='Course Ratings'!" + overallLetter + bc.row)
-        .setFontFamily("Arial").setFontSize(10).setFontWeight("bold");
+      dash.getRange(dashRow, 1).setValue(j + 1).setFontColor("#666666").setHorizontalAlignment("left");
+      dash.getRange(dashRow, 2).setValue(bc.state);
+      dash.getRange(dashRow, 3).setValue(bc.name);
+      dash.getRange(dashRow, 4).setValue(bc.city);
+      dash.getRange(dashRow, 6).setFormula("='Course Ratings'!" + overallLetter + bc.row).setFontWeight("bold");
     } else {
       dash.getRange(dashRow, 1, 1, 6).clearContent();
     }
@@ -997,7 +976,7 @@ function refreshGolfweekRankings() {
   var updated = 0;
   for (var i = 0; i < names.length; i++) {
     var name = String(names[i][0] || "").trim();
-    if (!name || name === "AVERAGES" || name === "COURSES RATED") continue;
+    if (isSummaryRow(name)) continue;
     var result = lookupInIndex(name, index);
     if (result) { applyGwRankToRow(ws, DATA_START_ROW + i, result); updated++; }
   }
@@ -1139,13 +1118,12 @@ function addCourse(formData) {
 // =====================================================================
 
 function getSelectedCourseRow_() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getActiveSheet().getName() !== SHEET_NAME) return null;
-  var row = ss.getActiveSheet().getActiveRange().getRow();
+  var ws = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  if (ws.getName() !== SHEET_NAME) return null;
+  var row = ws.getActiveRange().getRow();
   if (row < DATA_START_ROW) return null;
-  var ws = ss.getSheetByName(SHEET_NAME);
   var name = String(ws.getRange(row, COL.name).getValue() || "").trim();
-  if (!name || name === "AVERAGES" || name === "COURSES RATED") return null;
+  if (isSummaryRow(name)) return null;
   return { row: row, name: name, ws: ws };
 }
 
@@ -1190,7 +1168,7 @@ function findLastDataRow(ws) {
   var values = ws.getRange(DATA_START_ROW, COL.name, lastRow - DATA_START_ROW + 1, 1).getValues();
   for (var i = 0; i < values.length; i++) {
     var val = values[i][0];
-    if (val && String(val).trim() !== "" && String(val).trim() !== "AVERAGES") {
+    if (!isSummaryRow(String(val).trim())) {
       last = DATA_START_ROW + i;
     }
   }
@@ -1203,16 +1181,15 @@ function courseExists(ws, name, city) {
   if (lastRow < DATA_START_ROW) return false;
 
   var numRows = lastRow - DATA_START_ROW + 1;
-  var names  = ws.getRange(DATA_START_ROW, COL.name, numRows, 1).getValues();
-  var cities = ws.getRange(DATA_START_ROW, COL.city, numRows, 1).getValues();
-
+  var data = ws.getRange(DATA_START_ROW, COL.name, numRows, COL.city - COL.name + 1).getValues();
+  var cityOff = COL.city - COL.name;
   var nameLower = name.trim().toLowerCase();
   var cityLower = city.trim().toLowerCase();
 
-  for (var i = 0; i < names.length; i++) {
-    if (names[i][0] && String(names[i][0]).trim().toLowerCase() === nameLower) {
-      var exCity = String(cities[i][0] || "").trim().toLowerCase();
-      if (exCity === cityLower) return true;
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0] || "").trim().toLowerCase() === nameLower &&
+        String(data[i][cityOff] || "").trim().toLowerCase() === cityLower) {
+      return true;
     }
   }
   return false;
@@ -1239,7 +1216,7 @@ function diagnoseMissingGwRankings() {
   var missing = [];
   for (var i = 0; i < names.length; i++) {
     var name = String(names[i][0] || '').trim();
-    if (!name || name === 'AVERAGES' || name === 'COURSES RATED') continue;
+    if (isSummaryRow(name)) continue;
     var hit = lookupInIndex(name, index);
     if (!hit) missing.push(name + '  →  normalized: "' + normalizeCourseName(name) + '"');
   }
@@ -1255,7 +1232,7 @@ function diagnoseMissingGwRankings() {
 
 
 function testApiKey() {
-  var apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
+  var apiKey = getApiKey();
   if (!apiKey) {
     Logger.log("ANTHROPIC_API_KEY is not set in Script Properties.");
     Logger.log("   Go to Project Settings > Script Properties > Add:");

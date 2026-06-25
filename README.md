@@ -1,28 +1,28 @@
 # Golf Course Ratings Tracker
 
-A personal golf course rating system inspired by Golfweek's methodology. Track every course you play, rate them across 10 design criteria, and see your stats on a live dashboard — all in a single Excel workbook. Add new courses via a Python CLI or a Google Sheets Apps Script plugin, both powered by Claude AI for automatic metadata lookup.
+A personal golf course rating system inspired by Golfweek's methodology. Track every course you play, rate them across 10 design criteria, and see your stats on a live dashboard — all inside Google Sheets. Add new courses through a native Apps Script menu powered by Claude AI for automatic metadata lookup.
 
 ## Project Files
 
-**`Golf_Course_Ratings_Tracker.xlsx`** — Blank template ready to start fresh.
+**`sample.xlsx`** — Blank template ready to start fresh (open in Google Sheets via File → Import).
 
-**`Golf_Course_Ratings_Tracker_with_data.xlsx`** — Pre-populated workbook with ~120 courses already entered (use this to see a working example or as your active tracker).
+**`code.gs`** — Google Apps Script plugin that provides the "Golf Tracker" menu inside Google Sheets. Handles adding courses, ranking lookups, dashboard updates, and more.
 
-**`add_course.py`** — Command-line tool that appends a new course to the spreadsheet and uses the Claude API to auto-fill architect, course type, and Golfweek ranking list details. Automatically rebuilds the Top 10 sections after each addition.
+**`AddCourseDialog.html`** — HTML form dialog for entering course details (opened by "Add Course…").
 
-**`update_rankings.py`** — Standalone script that rebuilds the Top 10 Rated Courses and Top 10 by State sections on the Rankings Dashboard from current ratings. Run this after editing any ratings in the spreadsheet.
-
-**`Code.gs`** — Google Apps Script version of the add course and update rankings functionality. Install this in your Google Sheet for a native menu-driven experience without needing Python.
-
-**`AddCourseDialog.html`** — The HTML form dialog used by the Apps Script plugin. Provides a clean UI for entering course details directly inside Google Sheets.
+**`PickGwRankingDialog.html`** — HTML dialog for manually picking or correcting a Golfweek ranking for any selected row.
 
 **`scrape_rankings.py`** — Fetches all Golfweek ranking lists and writes one CSV per list into `data/` (gitignored). Re-run each year when Golfweek publishes updated rankings.
 
 **`merge_rankings.py`** — Merges all per-list CSVs in `data/` into a single `data/all_rankings.csv` with `gw_list` and `list_key` columns prepended. Import this into Google Sheets as a sheet named "GW Rankings" to enable fast, free ranking lookups that replace per-course Claude API calls.
 
+**`make_csv.py`** — Utility that converts JSON ranking data files in `data/` to CSV format.
+
+**`test_matching.py`** — Local test harness for the course-name matching logic used during ranking lookups.
+
 ## Spreadsheet Layout
 
-The workbook contains three sheets:
+The workbook contains three sheets (plus an optional fourth):
 
 ### Course Ratings
 
@@ -33,15 +33,19 @@ This is the main data sheet. Row 1 is the title, row 2 is a subtitle, row 3 hold
 | A | Row number |
 | B | Course Name |
 | C | Architect (original and renovator if applicable) |
-| D–E | City, State |
-| F | Type — Public, Private, Resort, Semi-Private, or Military |
-| G–H | Golfweek ranking list and rank number |
-| I–R | Ten rating criteria, each scored 1–10 (see below) |
-| S | Overall Rating (1–10) |
-| T–U | Most and Least Memorable Holes |
-| V | Notes |
+| D | City |
+| E | State |
+| F | Country |
+| G | Type — Public, Private, Resort, Semi-Private, or Military |
+| H | Golfweek ranking list |
+| I | Golfweek rank number |
+| J–S | Ten rating criteria, each scored 1–10 (see below) |
+| T | Overall Rating (1–10) |
+| U | Most Memorable Hole |
+| V | Least Memorable Hole |
+| W | Notes |
 
-Below the last course entry you'll find two summary rows: **AVERAGES** (formula-driven averages for every rating column) and **COURSES RATED** (count of courses with ratings entered). These rows move automatically when you add courses through the CLI.
+Below the last course entry you'll find two summary rows: **AVERAGES** (formula-driven averages for every rating column) and **COURSES RATED** (count of courses with ratings entered). These rows move automatically when you add courses through the plugin.
 
 ### Rankings Dashboard
 
@@ -64,85 +68,29 @@ A detailed rubric for each of the 10 rating criteria. Open this sheet whenever y
 
 Each criterion uses a 1–10 scale: 9–10 is exceptional, 7–8 is excellent, 5–6 is good, 3–4 is average, and 1–2 indicates significant weaknesses.
 
-## Using the CLI (`add_course.py`)
+### GW Rankings (optional)
 
-### Prerequisites
-
-```
-pip install anthropic openpyxl
-export ANTHROPIC_API_KEY=your_key_here
-```
-
-The API key is optional — if it isn't set the script still works, it just skips the auto-fill step.
-
-### Adding a Course
-
-**Interactive mode** (prompts you for each field):
-
-```
-python add_course.py
-```
-
-**One-liner with required fields:**
-
-```
-python add_course.py "Pebble Beach Golf Links" "Pebble Beach" "CA"
-```
-
-**With optional flags:**
-
-```
-python add_course.py "Augusta National" "Augusta" "GA" --type Private --notes "The dream"
-```
-
-### What the Script Does
-
-1. Opens the spreadsheet and checks for duplicate entries (same name, city, and state).
-2. Calls the Claude API to look up the course's architect, type (Public/Private/Resort/etc.), and which Golfweek ranking list it might appear on.
-3. Inserts a new row with proper formatting (fonts, borders, alternating row colors, gold highlight on the Overall Rating column).
-4. Moves the AVERAGES and COURSES RATED summary rows down to stay below the data.
-5. Updates the Rankings Dashboard formulas so the stats reflect the new range.
-6. Rebuilds the Top 10 Rated Courses and Top 10 by State sections from the current ratings.
-
-### CLI Flags
-
-| Flag | Description |
-|------|-------------|
-| `--file PATH` | Use a different `.xlsx` file (defaults to the one in the same folder) |
-| `--type TYPE` | Override the course type instead of using the AI lookup |
-| `--notes "..."` | Add freeform notes |
-| `--most-memorable "..."` | Note your most memorable hole |
-| `--least-memorable "..."` | Note your least memorable hole |
-| `--no-ai` | Skip the Claude lookup entirely |
-
-## Refreshing Rankings After Editing Ratings
-
-Whenever you change ratings in the spreadsheet, run:
-
-```
-python update_rankings.py
-```
-
-This rebuilds both Top 10 sections on the Rankings Dashboard. If you use `add_course.py` to add courses, this happens automatically.
+A fourth sheet populated from `data/all_rankings.csv` (produced by `merge_rankings.py`). When present, ranking lookups read from this sheet instead of calling the Claude API — faster, free, and more accurate. See "Scraping and Loading Golfweek Rankings" below.
 
 ## Google Sheets Apps Script Plugin
-
-If you prefer working entirely inside Google Sheets rather than running Python locally, the Apps Script plugin provides the same functionality through a native menu and dialog.
 
 ### Installation
 
 1. Open your Golf Course Ratings Tracker in Google Sheets.
 2. Go to **Extensions → Apps Script**.
-3. Replace the default `Code.gs` content with the contents of `Code.gs` from this repo.
+3. Replace the default `Code.gs` content with the contents of `code.gs` from this repo.
 4. Click the **+** next to "Files" → select **HTML** → name it `AddCourseDialog` (no extension) and paste the contents of `AddCourseDialog.html`.
-5. In the Apps Script editor, go to **Project Settings** (gear icon) → **Script Properties** → click **Add script property** and set the name to `ANTHROPIC_API_KEY` with your Anthropic API key as the value.
-6. Save the project and reload your spreadsheet.
+5. Add a second HTML file named `PickGwRankingDialog` and paste the contents of `PickGwRankingDialog.html`.
+6. In the Apps Script editor, go to **Project Settings** (gear icon) → **Script Properties** → click **Add script property** and set the name to `ANTHROPIC_API_KEY` with your Anthropic API key as the value.
+7. Save the project and reload your spreadsheet.
 
 After the page reloads a **Golf Tracker** menu will appear in the toolbar.
 
+> **Upgrading from the old 22-column layout (no Country column):** use **Golf Tracker → Insert Country Column** before doing anything else.
+
 ### Menu Options
 
-**Add Course…** — Opens a form dialog where you enter the course name, city, state, and optional fields (type override, most/least memorable holes, notes). On submit, the script looks up the course's Golfweek ranking (from the GW Rankings sheet if available, otherwise via the Claude API), checks for duplicates, inserts a formatted row, and rebuilds the Top 10 sections.
+**Add Course…** — Opens a form dialog where you enter the course name, city, state, country, and optional fields (type override, overall rating, most/least memorable holes, notes). On submit, the script looks up the course's Golfweek ranking (from the GW Rankings sheet if available, otherwise via the Claude API), checks for duplicates, inserts a formatted row, and rebuilds the Top 10 sections.
 
 **Update Rankings** — Rebuilds both Top 10 sections on the Rankings Dashboard from current data. Use this after manually editing ratings.
 
@@ -150,11 +98,17 @@ After the page reloads a **Golf Tracker** menu will appear in the toolbar.
 
 **GW Rankings: Import help…** — Displays step-by-step instructions for running `merge_rankings.py` and importing `all_rankings.csv` into the spreadsheet.
 
+**GW Rankings: Diagnose missing…** — Scans all courses and reports which ones are missing a Golfweek ranking, to help identify lookup failures or unranked courses.
+
+**Pick GW Ranking for Selected Row…** — Opens a dialog for the currently selected row that shows candidate matches from the GW Rankings sheet and lets you choose or manually enter the correct ranking.
+
 **Set API Key…** — Prompts you to enter or update your Anthropic API key (stored in Script Properties, not visible in the spreadsheet).
+
+**Insert Country Column** — One-time migration that inserts the Country column and shifts subsequent columns right (22 → 23 column layout).
 
 ### Features
 
-The Apps Script plugin mirrors every feature of the Python CLI: Claude AI auto-fill for architect, course type, and Golfweek ranking list; duplicate detection with an option to force-add; alternating white/gray row backgrounds; bold course names, italic gray architects, dark green overall ratings on a gold background; thin gray borders; AVERAGES and COURSES RATED summary rows that follow the data; dashboard formula range updates; and live Top 10 rebuilds. The dialog also displays a fun fact about the course when available.
+The Apps Script plugin provides: Claude AI auto-fill for architect, course type, and Golfweek ranking list; duplicate detection with an option to force-add; alternating white/gray row backgrounds; bold course names, italic gray architects, dark green overall ratings on a gold background; thin gray borders; AVERAGES and COURSES RATED summary rows that follow the data; dashboard formula range updates; and live Top 10 rebuilds. The dialog also displays a fun fact about the course when available.
 
 
 ## Scraping and Loading Golfweek Rankings
@@ -189,6 +143,8 @@ Then in Google Sheets: **File → Import → Upload** → select `data/all_ranki
 
 | Column | Description |
 |--------|-------------|
+| `gw_list` | Ranking list label (e.g. "Modern", "Classic") |
+| `list_key` | Machine key derived from filename prefix |
 | `rank` | Numeric rank |
 | `tied` | `Y` if tied (entry prefixed with `T`), else `N` |
 | `name` | Course name |
@@ -219,17 +175,6 @@ URLs in the `LISTS` array at the top of `scrape_rankings.py` point to specific a
 - Casino Top 50
 
 ## Typical Workflow
-
-### With the Python CLI
-
-1. Play a round.
-2. Run `python add_course.py "Course Name" "City" "ST"` to add the course with auto-filled metadata.
-3. Open the spreadsheet and fill in your 1–10 ratings for each of the 10 criteria plus your Overall Rating.
-4. Run `python update_rankings.py` to refresh the Top 10 lists.
-5. Optionally jot down your most/least memorable holes and any notes.
-6. Check the Rankings Dashboard to see how the new course stacks up.
-
-### With the Google Sheets Plugin
 
 1. **One-time setup**: run `python3 scrape_rankings.py && python3 merge_rankings.py`, then import `data/all_rankings.csv` into your spreadsheet as a sheet named `GW Rankings`.
 2. Play a round.
