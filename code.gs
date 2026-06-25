@@ -79,6 +79,8 @@ function onOpen() {
     .addItem("Update Rankings", "rebuildRankings")
     .addItem("Refresh Golfweek Rankings", "refreshGolfweekRankings")
     .addItem("GW Rankings: Import help...", "showImportRankingsHelp")
+    .addItem("GW Rankings: Diagnose missing...", "diagnoseMissingGwRankings")
+    .addItem("Pick GW Ranking for Selected Row...", "showFixGwRankingDialog")
     .addSeparator()
     .addItem("Set API Key...", "showApiKeyDialog")
     .addItem("Insert Country Column", "insertCountryColumn")
@@ -191,6 +193,158 @@ function lookupCourse(courseName) {
 }
 
 
+// Primary lists win key collisions over secondary lists (Casino, Short/Par3, etc.)
+var PRIMARY_GW_LISTS = {
+  'Modern': true, 'Classic': true, 'Public': true, 'Resort': true,
+  'GBI Classic': true, 'GBI Modern': true, 'International': true
+};
+
+var GW_STOPWORDS = { 'the': true, 'at': true, 'of': true, 'in': true, 'a': true, 'an': true, 'and': true };
+
+
+function normalizeCourseName(name) {
+  var s = String(name || '').trim().toLowerCase();
+  if (s.indexOf('the ') === 0) s = s.slice(4);
+  s = s.replace(/['''.,]/g, '');
+  s = s.replace(/\b(golf links|golf course|golf club|golf resort|country club|golf & country club|g&cc|gc|cc|club)\b/g, '');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+
+function tokenSet(name) {
+  return normalizeCourseName(name).split(' ').filter(function(t) {
+    return t.length > 1 && !GW_STOPWORDS[t];
+  });
+}
+
+
+function jaccardScore(tokensA, tokensB) {
+  var setA = {}, intersection = 0, union = 0;
+  tokensA.forEach(function(t) { setA[t] = true; });
+  tokensB.forEach(function(t) {
+    if (setA[t]) intersection++;
+    else union++;
+  });
+  union += tokensA.length;
+  return union === 0 ? 0 : intersection / union;
+}
+
+
+// =====================================================================
+//  GW CANDIDATES — top N fuzzy matches for the dialog dropdown
+// =====================================================================
+
+function getGwCandidates(courseName) {
+  var index = buildRankingsIndex();
+  return index ? collectCandidates(courseName, index, 6) : [];
+}
+
+function collectCandidates(name, index, maxN) {
+  var tokens = tokenSet(name);
+  if (!tokens.length) return [];
+  var scored = scoreAllEntries(tokens, index);
+  scored.sort(function(a, b) { return b.score - a.score; });
+  return dedupeCandidates(scored, maxN);
+}
+
+function scoreAllEntries(tokens, index) {
+  var THRESHOLD = 0.25, out = [];
+  for (var key in index) {
+    var kt = key.split(' ').filter(function(t) { return t.length > 1 && !GW_STOPWORDS[t]; });
+    var s = jaccardScore(tokens, kt);
+    if (s >= THRESHOLD) {
+      var e = index[key];
+      out.push({ score: s, label: e._name || key, gw_list: e.gw_list, gw_rank: e.gw_rank });
+    }
+  }
+  return out;
+}
+
+function dedupeCandidates(scored, maxN) {
+  var seen = {}, out = [];
+  for (var i = 0; i < scored.length && out.length < maxN; i++) {
+    var k = scored[i].label;
+    if (!seen[k]) {
+      seen[k] = true;
+      out.push({ label: scored[i].label, gw_list: scored[i].gw_list, gw_rank: scored[i].gw_rank, pct: Math.round(scored[i].score * 100) });
+    }
+  }
+  return out;
+}
+
+
+function fuzzyLookupInIndex(name, index) {
+  var THRESHOLD = 0.6;
+  var tokens = tokenSet(name);
+  if (!tokens.length) return null;
+  var bestScore = 0, bestEntry = null, bestKey = null;
+  for (var key in index) {
+    var keyTokens = key.split(' ').filter(function(t) { return t.length > 1 && !GW_STOPWORDS[t]; });
+    var score = jaccardScore(tokens, keyTokens);
+    if (score > bestScore) { bestScore = score; bestEntry = index[key]; bestKey = key; }
+  }
+  if (bestScore >= THRESHOLD) {
+    Logger.log('Fuzzy match: "' + name + '" → "' + bestKey + '" (score: ' + bestScore.toFixed(2) + ')');
+    return bestEntry;
+  }
+  return null;
+}
+
+
+function addToAlsoRanked(winner, loser) {
+  // Skip cross-course pollution (different course sharing a key fragment)
+  if (winner._name && loser._name && winner._name !== loser._name) return;
+  // Skip self-reference (winner's own ranking, or same-object collision)
+  if (winner.gw_list === loser.gw_list && winner.gw_rank === loser.gw_rank) return;
+  var item = {gw_list: loser.gw_list, gw_rank: loser.gw_rank};
+  if (!winner.also_ranked) winner.also_ranked = [];
+  for (var i = 0; i < winner.also_ranked.length; i++) {
+    if (winner.also_ranked[i].gw_list === item.gw_list &&
+        winner.also_ranked[i].gw_rank === item.gw_rank) return;
+  }
+  winner.also_ranked.push(item);
+}
+
+
+function indexAddEntry(index, key, entry) {
+  if (!key) return;
+  if (!index[key]) { index[key] = entry; return; }
+  var ex = index[key];
+  var entryWins = (ex._primary !== entry._primary)
+    ? entry._primary
+    : (entry.gw_rank || Infinity) < (ex.gw_rank || Infinity);
+  var winner = entryWins ? entry : ex;
+  var loser  = entryWins ? ex    : entry;
+  if (entryWins) index[key] = entry;
+  if (loser._primary && loser.gw_list && loser.gw_rank) {
+    if (loser.also_ranked) {
+      loser.also_ranked.forEach(function(a) { addToAlsoRanked(winner, a); });
+    }
+    addToAlsoRanked(winner, loser);
+  }
+}
+
+
+function indexRow(index, rawName, entry) {
+  indexAddEntry(index, rawName.toLowerCase(), entry);
+  indexAddEntry(index, normalizeCourseName(rawName), entry);
+
+  var m = rawName.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+  if (m) {
+    var preParen  = m[1].trim();
+    var parenText = m[2].trim();
+    var normPre  = normalizeCourseName(preParen);
+    var normParen = normalizeCourseName(parenText);
+    // Only index fragments with >= 2 significant tokens to avoid generic 1-word false positives
+    if (tokenSet(preParen).length >= 2)  indexAddEntry(index, normPre,   entry);
+    if (tokenSet(parenText).length >= 2) indexAddEntry(index, normParen, entry);
+    // Combined key (pre + paren) — always index as it's more specific
+    var combined = (normPre + ' ' + normParen).replace(/\s+/g, ' ').trim();
+    if (combined) indexAddEntry(index, combined, entry);
+  }
+}
+
+
 function buildRankingsIndex() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var rankSheet = ss.getSheetByName(GW_RANKINGS_SHEET);
@@ -205,21 +359,68 @@ function buildRankingsIndex() {
 
   var index = {};
   for (var i = 1; i < data.length; i++) {
-    var key = String(data[i][ci.name] || '').trim().toLowerCase();
-    if (!key || index[key]) continue;
-    var r = data[i][ci.rank];
-    index[key] = {
-      gw_list: String(data[i][ci.list] || ''),
-      gw_rank: (typeof r === 'number') ? r : (parseInt(r, 10) || null)
+    var raw = String(data[i][ci.name] || '').trim();
+    if (!raw) continue;
+    var r   = data[i][ci.rank];
+    var gwList = String(data[i][ci.list] || '');
+    var entry = {
+      gw_list:  gwList,
+      gw_rank:  (typeof r === 'number') ? r : (parseInt(r, 10) || null),
+      _primary: !!PRIMARY_GW_LISTS[gwList],
+      _name:    raw.toLowerCase()
     };
+    indexRow(index, raw, entry);
   }
   return index;
 }
 
 
+function lookupInIndex(courseName, index) {
+  var name = courseName.trim();
+
+  // 1. Exact
+  var hit = index[name.toLowerCase()];
+  if (hit) return hit;
+
+  // 2. Dash-to-paren: "X - Y" → "X (Y)" — must run BEFORE normalize to prevent
+  //    token bleed (e.g. "The Prairie Club - Dunes" collapsing into "prairie dunes")
+  var dashMatch = name.match(/^(.+?)\s+-\s+(.+)$/);
+  var base = dashMatch ? dashMatch[1].trim() : null;
+  if (dashMatch) {
+    var variant = dashMatch[2].trim();
+    var candidates = [base, base.replace(/^[Tt]he\s+/, '')];
+    for (var c = 0; c < candidates.length; c++) {
+      var pk = (candidates[c] + ' (' + variant + ')').toLowerCase();
+      if (index[pk]) return index[pk];
+    }
+  }
+
+  // 3. "#N" → "(No. N)" for numbered courses (e.g. Pinehurst #4)
+  if (name.indexOf('#') !== -1) {
+    var noKey = name.toLowerCase().replace(/#(\d+)/g, '(no. $1)');
+    if (index[noKey]) return index[noKey];
+  }
+
+  // 4. Normalized
+  hit = index[normalizeCourseName(name)];
+  if (hit) return hit;
+
+  // 5. Strip-variant base (exact + normalized)
+  var stripBase = base || name.replace(/\s*-\s*.*$/, '').trim();
+  if (stripBase !== name) {
+    hit = index[stripBase.toLowerCase()] || index[normalizeCourseName(stripBase)];
+    if (hit) return hit;
+  }
+
+  // 6. Fuzzy — on base name only for dash-names to prevent variant token bleed
+  var fuzzyName = (base) ? base : name;
+  return fuzzyLookupInIndex(fuzzyName, index);
+}
+
+
 function lookupRankingFromSheet(courseName) {
   var index = buildRankingsIndex();
-  return index ? (index[courseName.trim().toLowerCase()] || null) : null;
+  return index ? lookupInIndex(courseName, index) : null;
 }
 
 
@@ -734,6 +935,24 @@ function updateTop10ByState(dash, courses) {
 }
 
 
+function updateAlsoRankedNote(ws, row, alsoRanked, gwResult) {
+  if (!alsoRanked || !alsoRanked.length) return;
+  var parts = alsoRanked
+    .filter(function(a) {
+      return PRIMARY_GW_LISTS[a.gw_list] &&
+             !(gwResult && a.gw_list === gwResult.gw_list && a.gw_rank === gwResult.gw_rank);
+    })
+    .map(function(a) { return a.gw_list + ' #' + a.gw_rank; });
+  if (!parts.length) return;
+  var alsoText  = 'GW also: ' + parts.join(', ');
+  var notesCell = ws.getRange(row, COL.notes);
+  var lines     = String(notesCell.getValue() || '').trim().split('\n')
+                    .filter(function(l) { return l.trim().indexOf('GW also:') !== 0; });
+  lines.push(alsoText);
+  notesCell.setValue(lines.join('\n').trim());
+}
+
+
 function applyGwRankToRow(ws, row, gwResult) {
   if (gwResult.gw_list) {
     ws.getRange(row, COL.gw_list).setValue(gwResult.gw_list);
@@ -752,6 +971,7 @@ function applyGwRankToRow(ws, row, gwResult) {
     rankCell.setValue(gwResult.gw_rank);
   }
   rankCell.setFontWeight("bold").setFontColor(DARK_GREEN);
+  updateAlsoRankedNote(ws, row, gwResult.also_ranked, gwResult);
 }
 
 
@@ -778,7 +998,7 @@ function refreshGolfweekRankings() {
   for (var i = 0; i < names.length; i++) {
     var name = String(names[i][0] || "").trim();
     if (!name || name === "AVERAGES" || name === "COURSES RATED") continue;
-    var result = index[name.toLowerCase()];
+    var result = lookupInIndex(name, index);
     if (result) { applyGwRankToRow(ws, DATA_START_ROW + i, result); updated++; }
   }
 
@@ -876,12 +1096,16 @@ function addCourse(formData) {
   // Step 5: Write the course data
   addCourseRow(ws, insertRow, 0, finalData, true);  // number & color fixed in step 6
 
-  // Step 5b: Look up current Golfweek ranking (sheet first, Claude fallback)
-  var gwResult = lookupRankingFromSheet(finalData.name) || lookupGolfweekRanking(finalData.name);
-  if (gwResult) {
-    applyGwRankToRow(ws, insertRow, gwResult);
-    finalData.gw_list = gwResult.gw_list || finalData.gw_list;
-    finalData.gw_rank = gwResult.gw_rank || finalData.gw_rank;
+  // Step 5b: Look up current Golfweek ranking (skip if user confirmed a match in the dialog)
+  if (!formData.gw_confirmed) {
+    var gwResult = lookupRankingFromSheet(finalData.name) || lookupGolfweekRanking(finalData.name);
+    if (gwResult) {
+      applyGwRankToRow(ws, insertRow, gwResult);
+      finalData.gw_list = gwResult.gw_list || finalData.gw_list;
+      finalData.gw_rank = gwResult.gw_rank || finalData.gw_rank;
+    }
+  } else if (finalData.gw_rank) {
+    applyGwRankToRow(ws, insertRow, { gw_list: finalData.gw_list, gw_rank: finalData.gw_rank });
   }
 
   // Step 6: Renumber all courses 1..N and fix alternating colors
@@ -907,6 +1131,50 @@ function addCourse(formData) {
   if (finalData.country && finalData.country !== "US") msg += "\nCountry: " + finalData.country;
 
   return { success: true, message: msg };
+}
+
+
+// =====================================================================
+//  PICK GW RANKING FOR SELECTED ROW
+// =====================================================================
+
+function getSelectedCourseRow_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getActiveSheet().getName() !== SHEET_NAME) return null;
+  var row = ss.getActiveSheet().getActiveRange().getRow();
+  if (row < DATA_START_ROW) return null;
+  var ws = ss.getSheetByName(SHEET_NAME);
+  var name = String(ws.getRange(row, COL.name).getValue() || "").trim();
+  if (!name || name === "AVERAGES" || name === "COURSES RATED") return null;
+  return { row: row, name: name, ws: ws };
+}
+
+function showFixGwRankingDialog() {
+  var ui = SpreadsheetApp.getUi();
+  var ctx = getSelectedCourseRow_();
+  if (!ctx) {
+    ui.alert("Please select a valid course row in the '" + SHEET_NAME + "' sheet.");
+    return;
+  }
+  var tmpl = HtmlService.createTemplateFromFile("PickGwRankingDialog");
+  tmpl.rowNum      = ctx.row;
+  tmpl.courseName  = ctx.name;
+  tmpl.currentList = String(ctx.ws.getRange(ctx.row, COL.gw_list).getValue() || "");
+  tmpl.currentRank = ctx.ws.getRange(ctx.row, COL.gw_rank).getValue() || "";
+  ui.showModalDialog(tmpl.evaluate().setWidth(500).setHeight(440), "Pick GW Ranking");
+}
+
+function saveGwRankForRow(rowNum, gwList, gwRank) {
+  var ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!ws) return { success: false, message: "Sheet not found." };
+  if (gwList && gwRank) {
+    applyGwRankToRow(ws, rowNum, { gw_list: gwList, gw_rank: gwRank });
+  } else {
+    ws.getRange(rowNum, COL.gw_list).setValue(gwList || "");
+    ws.getRange(rowNum, COL.gw_rank).setValue("").setFontWeight("normal").setFontColor("#000000");
+  }
+  SpreadsheetApp.flush();
+  return { success: true };
 }
 
 
@@ -954,6 +1222,37 @@ function courseExists(ws, name, city) {
 // =====================================================================
 //  DIAGNOSTICS
 // =====================================================================
+
+function diagnoseMissingGwRankings() {
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var ws  = ss.getSheetByName(SHEET_NAME);
+  var ui  = SpreadsheetApp.getUi();
+  if (!ws) { ui.alert("Sheet '" + SHEET_NAME + "' not found."); return; }
+
+  var index = buildRankingsIndex();
+  if (!index) { ui.alert("No '" + GW_RANKINGS_SHEET + "' sheet found."); return; }
+
+  var lastRow = ws.getLastRow();
+  if (lastRow < DATA_START_ROW) { ui.alert("No courses found."); return; }
+
+  var names = ws.getRange(DATA_START_ROW, COL.name, lastRow - DATA_START_ROW + 1, 1).getValues();
+  var missing = [];
+  for (var i = 0; i < names.length; i++) {
+    var name = String(names[i][0] || '').trim();
+    if (!name || name === 'AVERAGES' || name === 'COURSES RATED') continue;
+    var hit = lookupInIndex(name, index);
+    if (!hit) missing.push(name + '  →  normalized: "' + normalizeCourseName(name) + '"');
+  }
+
+  Logger.log('=== Courses with NO GW Rankings match (' + missing.length + ') ===');
+  for (var j = 0; j < missing.length; j++) Logger.log(missing[j]);
+
+  var msg = missing.length === 0
+    ? 'All courses matched!'
+    : missing.length + ' course(s) had no match. Check Apps Script Logs (View → Logs) for details.';
+  ui.alert(msg);
+}
+
 
 function testApiKey() {
   var apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");

@@ -282,17 +282,19 @@
       </div>
     </div>
 
+    <div class="form-group">
+      <label>Golfweek Match</label>
+      <select id="gwMatch" onchange="onGwMatchChange()">
+        <option value="">None / Not ranked</option>
+        <option value="Modern">Modern (manual)</option>
+        <option value="Classic">Classic (manual)</option>
+        <option value="Resort">Resort (manual)</option>
+        <option value="Public">Public (manual)</option>
+      </select>
+      <div id="gwMatchNote" style="font-size:11px;color:#888;margin-top:3px;display:none;"></div>
+    </div>
+
     <div class="row">
-      <div class="form-group">
-        <label>Golfweek List</label>
-        <select id="gw_list">
-          <option value="">None</option>
-          <option value="Modern">Modern</option>
-          <option value="Classic">Classic</option>
-          <option value="Resort">Resort</option>
-          <option value="Public">Public</option>
-        </select>
-      </div>
       <div class="form-group">
         <label>Most Memorable Hole</label>
         <input type="text" id="most_memorable" placeholder="e.g. #7">
@@ -338,7 +340,9 @@
 
   <script>
     var forceAdd = false;
-    var lookupData = null;  // stores the AI result for fun_fact, etc.
+    var lookupData = null;
+    var gwConfirmed = false;
+    var pendingCandidates = null;  // candidates that arrived before the form was shown
 
     // ── STEP 1: AI Lookup ──
 
@@ -351,11 +355,72 @@
 
       showStatus("Looking up \"" + courseName + "\"... this takes a few seconds.", "loading");
       document.getElementById("lookupBtn").disabled = true;
+      gwConfirmed = false;
+      pendingCandidates = null;
 
+      // Fire both calls in parallel — candidates (fast) + Claude metadata (slow)
       google.script.run
         .withSuccessHandler(onLookupSuccess)
         .withFailureHandler(onLookupFailure)
         .lookupCourse(courseName);
+
+      google.script.run
+        .withSuccessHandler(onCandidatesLoaded)
+        .withFailureHandler(function() {})
+        .getGwCandidates(courseName);
+    }
+
+    function onCandidatesLoaded(candidates) {
+      var section = document.getElementById("detailsSection");
+      if (section.classList.contains("visible")) {
+        applyCandidates(candidates);
+      } else {
+        pendingCandidates = candidates;  // apply once form is shown
+      }
+    }
+
+    function applyCandidates(candidates) {
+      var sel = document.getElementById("gwMatch");
+      sel.innerHTML = "";
+      gwConfirmed = candidates.length > 0;
+
+      addOpt(sel, "", "None / Not ranked");
+
+      if (candidates.length) {
+        candidates.forEach(function(c) {
+          var val = c.gw_list + "|" + (c.gw_rank || "");
+          var txt = toTitleCase(c.label) + " — " + c.gw_list + (c.gw_rank ? " #" + c.gw_rank : "") + " (" + c.pct + "% match)";
+          addOpt(sel, val, txt);
+        });
+        var note = document.getElementById("gwMatchNote");
+        note.textContent = candidates.length + " candidate" + (candidates.length > 1 ? "s" : "") + " found in GW Rankings sheet. Select the correct match or choose None.";
+        note.style.display = "block";
+      } else {
+        // No GW Rankings sheet — fall back to manual list options
+        addOpt(sel, "Modern", "Modern (manual)");
+        addOpt(sel, "Classic", "Classic (manual)");
+        addOpt(sel, "Resort", "Resort (manual)");
+        addOpt(sel, "Public", "Public (manual)");
+      }
+
+      // Pre-select best candidate (index 1) if there is one
+      if (candidates.length) sel.selectedIndex = 1;
+      onGwMatchChange();
+    }
+
+    function addOpt(sel, val, txt) {
+      var opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = txt;
+      sel.appendChild(opt);
+    }
+
+    function toTitleCase(str) {
+      return str.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    }
+
+    function onGwMatchChange() {
+      // Nothing extra to do — value is read at submit time
     }
 
     function onLookupSuccess(data) {
@@ -370,7 +435,6 @@
       document.getElementById("country").value     = data.country || "";
       document.getElementById("architect").value   = data.architect || "";
       setSelect("type", data.type);
-      setSelect("gw_list", data.gw_list);
 
       // Highlight AI-filled fields
       ["name", "city", "state", "country", "architect"].forEach(function(id) {
@@ -379,7 +443,6 @@
         }
       });
       if (data.type) document.getElementById("type").classList.add("ai-filled");
-      if (data.gw_list) document.getElementById("gw_list").classList.add("ai-filled");
 
       // Show fun fact
       if (data.fun_fact) {
@@ -388,7 +451,7 @@
         ff.style.display = "block";
       }
 
-      // Reveal details section
+      // Reveal details section; apply candidates if they arrived first
       showDetails();
     }
 
@@ -404,6 +467,8 @@
 
     function showManualEntry() {
       clearStatus();
+      gwConfirmed = false;
+      pendingCandidates = null;
       document.getElementById("name").value = document.getElementById("courseName").value;
       document.getElementById("country").value = "US";
       showDetails();
@@ -411,6 +476,10 @@
 
     function showDetails() {
       document.getElementById("detailsSection").classList.add("visible");
+      if (pendingCandidates !== null) {
+        applyCandidates(pendingCandidates);
+        pendingCandidates = null;
+      }
     }
 
     // ── STEP 2: Submit ──
@@ -431,6 +500,16 @@
         return;
       }
 
+      var gwMatchVal = document.getElementById("gwMatch").value;
+      var gw_list = "", gw_rank = null;
+      if (gwMatchVal.indexOf("|") !== -1) {
+        var parts = gwMatchVal.split("|");
+        gw_list = parts[0];
+        gw_rank = parts[1] ? parseInt(parts[1], 10) : null;
+      } else {
+        gw_list = gwMatchVal;
+      }
+
       var formData = {
         name:            name,
         city:            city,
@@ -438,7 +517,9 @@
         country:         document.getElementById("country").value.trim(),
         architect:       document.getElementById("architect").value.trim(),
         type:            document.getElementById("type").value,
-        gw_list:         document.getElementById("gw_list").value,
+        gw_list:         gw_list,
+        gw_rank:         gw_rank,
+        gw_confirmed:    gwConfirmed,
         overall:         overallVal,
         most_memorable:  document.getElementById("most_memorable").value.trim(),
         least_memorable: document.getElementById("least_memorable").value.trim(),

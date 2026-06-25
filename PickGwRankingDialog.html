@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Google Sans", Roboto, Arial, sans-serif; font-size: 14px; color: #333; padding: 20px 24px; background: #fff; }
+    h2 { font-size: 16px; font-weight: 500; color: #1B5E20; margin-bottom: 2px; }
+    .course-sub { font-size: 13px; color: #555; margin-bottom: 12px; }
+    .current { font-size: 12px; color: #555; background: #F5F5F5; padding: 6px 10px; border-radius: 4px; margin-bottom: 14px; }
+    .section-label { font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 8px; }
+    #candidates { min-height: 36px; margin-bottom: 4px; }
+    .candidate { padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 5px; cursor: pointer; font-size: 13px; }
+    .candidate:hover { border-color: #1B5E20; background: #F1F8E9; }
+    .candidate.selected { border-color: #1B5E20; background: #E8F5E9; font-weight: 500; }
+    .manual-row { display: flex; gap: 8px; margin-top: 10px; }
+    .manual-row select { flex: 1; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; font-family: inherit; }
+    .manual-row input { width: 90px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; font-family: inherit; }
+    .manual-row select:focus, .manual-row input:focus { outline: none; border-color: #1B5E20; }
+    .btn-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    button { padding: 7px 16px; border: none; border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer; transition: background 0.15s; }
+    .btn-primary { background: #1B5E20; color: #fff; }
+    .btn-primary:hover { background: #2E7D32; }
+    .btn-secondary { background: #f1f1f1; color: #333; }
+    .btn-secondary:hover { background: #e0e0e0; }
+    .btn-danger { background: #fff; color: #C62828; border: 1px solid #EF9A9A; }
+    .btn-danger:hover { background: #FFEBEE; }
+    #status { margin-top: 10px; padding: 8px 10px; border-radius: 4px; font-size: 13px; display: none; }
+    #status.success { display: block; background: #E8F5E9; color: #1B5E20; border: 1px solid #A5D6A7; }
+    #status.error   { display: block; background: #FFEBEE; color: #C62828; border: 1px solid #EF9A9A; }
+    #status.loading { display: block; background: #FFF8E1; color: #F57F17; border: 1px solid #FFE082; }
+  </style>
+</head>
+<body>
+
+  <h2>Pick GW Ranking</h2>
+  <p class="course-sub"><?= courseName ?></p>
+  <div class="current">Current: <strong><?= currentList ? (currentList + (currentRank ? " #" + currentRank : "")) : "—" ?></strong></div>
+
+  <div class="section-label">Matches from GW Rankings</div>
+  <div id="candidates"><em style="color:#999;font-size:12px">Loading matches…</em></div>
+
+  <div class="section-label" style="margin-top:14px">Or enter manually</div>
+  <div class="manual-row">
+    <select id="manualList">
+      <option value="">None / clear list</option>
+      <option value="Modern">Modern</option>
+      <option value="Classic">Classic</option>
+      <option value="Resort">Resort</option>
+      <option value="Public">Public</option>
+      <option value="GBI Classic">GBI Classic</option>
+      <option value="GBI Modern">GBI Modern</option>
+      <option value="International">International</option>
+    </select>
+    <input type="number" id="manualRank" placeholder="Rank #" min="1" max="9999">
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-danger" onclick="clearRanking()">Clear Ranking</button>
+    <button class="btn-secondary" onclick="google.script.host.close()">Cancel</button>
+    <button class="btn-primary" onclick="applyRanking()">Apply</button>
+  </div>
+  <div id="status"></div>
+
+  <script>
+    var ROW_NUM = <?!= rowNum ?>;
+    var COURSE_NAME = <?!= JSON.stringify(courseName) ?>;
+
+    // Pre-populate manual fields with current ranking
+    document.getElementById("manualList").value = <?!= JSON.stringify(currentList || "") ?>;
+    document.getElementById("manualRank").value = <?!= (currentRank !== "" && currentRank) ? currentRank : '""' ?>;
+
+    google.script.run
+      .withSuccessHandler(renderCandidates)
+      .withFailureHandler(function() {
+        document.getElementById("candidates").innerHTML =
+          "<em style='color:#999;font-size:12px'>No GW Rankings sheet found.</em>";
+      })
+      .getGwCandidates(COURSE_NAME);
+
+    function renderCandidates(candidates) {
+      var el = document.getElementById("candidates");
+      if (!candidates || !candidates.length) {
+        el.innerHTML = "<em style='color:#999;font-size:12px'>No matches found in GW Rankings sheet.</em>";
+        return;
+      }
+      el.innerHTML = "";
+      candidates.forEach(function(c) {
+        var div = document.createElement("div");
+        div.className = "candidate";
+        var label = c.label.replace(/\b\w/g, function(x) { return x.toUpperCase(); });
+        div.textContent = label + " — " + c.gw_list + (c.gw_rank ? " #" + c.gw_rank : "") + " (" + c.pct + "% match)";
+        div.onclick = function() {
+          document.querySelectorAll(".candidate").forEach(function(d) { d.classList.remove("selected"); });
+          div.classList.add("selected");
+          document.getElementById("manualList").value = c.gw_list;
+          document.getElementById("manualRank").value = c.gw_rank || "";
+        };
+        el.appendChild(div);
+      });
+      el.firstChild.click();
+    }
+
+    function applyRanking() {
+      var list = document.getElementById("manualList").value;
+      var rankRaw = document.getElementById("manualRank").value;
+      var rank = rankRaw ? parseInt(rankRaw, 10) : null;
+      showStatus("Saving…", "loading");
+      google.script.run
+        .withSuccessHandler(onSave)
+        .withFailureHandler(function(e) { showStatus("Error: " + e.message, "error"); })
+        .saveGwRankForRow(ROW_NUM, list, rank);
+    }
+
+    function clearRanking() {
+      showStatus("Clearing…", "loading");
+      google.script.run
+        .withSuccessHandler(onSave)
+        .withFailureHandler(function(e) { showStatus("Error: " + e.message, "error"); })
+        .saveGwRankForRow(ROW_NUM, "", null);
+    }
+
+    function onSave(r) {
+      showStatus(r.success ? "Saved!" : r.message, r.success ? "success" : "error");
+      if (r.success) setTimeout(function() { google.script.host.close(); }, 1200);
+    }
+
+    function showStatus(msg, type) {
+      var el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = type;
+    }
+  </script>
+</body>
+</html>
